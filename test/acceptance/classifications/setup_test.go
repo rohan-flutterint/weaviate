@@ -14,8 +14,10 @@ package test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/go-openapi/strfmt"
+	"github.com/stretchr/testify/require"
 	"github.com/weaviate/weaviate/client/objects"
 	clschema "github.com/weaviate/weaviate/client/schema"
 	"github.com/weaviate/weaviate/entities/models"
@@ -407,4 +409,16 @@ func assertGetObjectEventually(t *testing.T, uuid strfmt.UUID) *models.Object {
 	})
 
 	return object
+}
+
+func assertShardsReadyEventually(t *testing.T, className string) {
+
+	checkThunk := func() interface{} {
+		shardStatus, err := helper.Client(t).Schema.SchemaObjectsShardsGet(clschema.NewSchemaObjectsShardsGetParams().WithClassName(className), nil)
+		require.Nil(t, err)
+		require.GreaterOrEqual(t, len(shardStatus.Payload), 1)
+		return shardStatus.Payload[0].Status
+	}
+
+	testhelper.AssertEventuallyEqualWithFrequencyAndTimeout(t, "READY", checkThunk, 250*time.Millisecond, 15*time.Second)
 }
