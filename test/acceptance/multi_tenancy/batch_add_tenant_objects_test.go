@@ -16,11 +16,9 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-
-	"github.com/weaviate/weaviate/client/batch"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/client/batch"
 	"github.com/weaviate/weaviate/entities/models"
 	"github.com/weaviate/weaviate/entities/schema"
 	"github.com/weaviate/weaviate/test/helper"
@@ -30,7 +28,8 @@ func TestBatchAddTenantObjects(t *testing.T) {
 	testClass := models.Class{
 		Class: "MultiTenantClass",
 		MultiTenancyConfig: &models.MultiTenancyConfig{
-			Enabled: true,
+			Enabled:            true,
+			AutoTenantCreation: true,
 		},
 		Properties: []*models.Property{
 			{
@@ -72,8 +71,6 @@ func TestBatchAddTenantObjects(t *testing.T) {
 		helper.DeleteClass(t, testClass.Class)
 	}()
 
-	helper.CreateTenants(t, testClass.Class, []*models.Tenant{{Name: tenantName}})
-
 	t.Run("add and get tenant objects", func(t *testing.T) {
 		helper.CreateObjectsBatch(t, tenantObjects)
 
@@ -93,12 +90,14 @@ func TestBatchWithMixedTenants(t *testing.T) {
 		{
 			Class: className + "1",
 			MultiTenancyConfig: &models.MultiTenancyConfig{
-				Enabled: true,
+				Enabled:            true,
+				AutoTenantCreation: true,
 			},
 		}, {
 			Class: className + "2",
 			MultiTenancyConfig: &models.MultiTenancyConfig{
-				Enabled: true,
+				Enabled:            true,
+				AutoTenantCreation: true,
 			},
 		},
 	}
@@ -179,7 +178,8 @@ func TestAddBatchToNonMultiClass(t *testing.T) {
 	testClass := models.Class{
 		Class: className,
 		MultiTenancyConfig: &models.MultiTenancyConfig{
-			Enabled: false,
+			Enabled:            false,
+			AutoTenantCreation: true,
 		},
 	}
 	tenantObjects := []*models.Object{

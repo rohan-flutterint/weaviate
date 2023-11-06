@@ -333,7 +333,7 @@ func copyByteSlice(src []byte) []byte {
 }
 
 func assertSingleSegmentOfSize(t *testing.T, bucket *Bucket, expectedMinSize, expectedMaxSize int64) {
-	files, err := bucket.ListFiles(context.Background())
+	files, err := bucket.ListFiles(context.Background(), bucket.dir)
 	require.NoError(t, err)
 
 	dbFiles := make([]string, 0, len(files))
@@ -351,7 +351,7 @@ func assertSingleSegmentOfSize(t *testing.T, bucket *Bucket, expectedMinSize, ex
 }
 
 func assertSecondSegmentOfSize(t *testing.T, bucket *Bucket, expectedMinSize, expectedMaxSize int64) {
-	files, err := bucket.ListFiles(context.Background())
+	files, err := bucket.ListFiles(context.Background(), bucket.dir)
 	require.NoError(t, err)
 
 	dbFiles := make([]string, 0, len(files))

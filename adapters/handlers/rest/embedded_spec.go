@@ -3917,6 +3917,11 @@ func init() {
     "MultiTenancyConfig": {
       "description": "Configuration related to multi-tenancy within a class",
       "properties": {
+        "autoTenantCreation": {
+          "description": "Nonexistent tenants will be created implicitly",
+          "type": "boolean",
+          "x-omitempty": false
+        },
         "enabled": {
           "description": "Whether or not multi-tenancy is enabled for this class",
           "type": "boolean",
@@ -9079,6 +9084,11 @@ func init() {
     "MultiTenancyConfig": {
       "description": "Configuration related to multi-tenancy within a class",
       "properties": {
+        "autoTenantCreation": {
+          "description": "Nonexistent tenants will be created implicitly",
+          "type": "boolean",
+          "x-omitempty": false
+        },
         "enabled": {
           "description": "Whether or not multi-tenancy is enabled for this class",
           "type": "boolean",

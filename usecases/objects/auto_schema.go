@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -491,4 +492,82 @@ func (m *autoSchemaManager) determineNestedPropertiesOfArray(valArray []interfac
 	}
 
 	return nestedProperties, nil
+}
+
+type classTenants map[*models.Class]map[string]struct{}
+
+func (m *autoSchemaManager) autoTenants(ctx context.Context,
+	principal *models.Principal, objects []*models.Object,
+) error {
+	var (
+		ct         = make(classTenants)
+		autoTenant = false
+	)
+
+	for _, obj := range objects {
+		// TODO: track the classes we have already checked
+		//       before calling getClass again
+		o := models.Object{Class: obj.Class}
+		class, err := m.getClass(principal, &o)
+		if err != nil {
+			return err
+		}
+
+		// class not found in schema. this will have already
+		// been caught by b.validateObjectsConcurrently, and
+		// will be handled accordingly, so we don't need to
+		// do anything here
+		if class == nil {
+			continue
+		}
+
+		if autoTenant || shouldAutoCreateTenants(class) {
+			if !autoTenant {
+				autoTenant = true
+			}
+			if _, ok := ct[class]; !ok {
+				ct[class] = map[string]struct{}{obj.Tenant: {}}
+				continue
+			}
+			ct[class][obj.Tenant] = struct{}{}
+		}
+	}
+
+	if autoTenant {
+		for c, ts := range ct {
+			l := make([]*models.Tenant, len(ts))
+			i := 0
+			for t := range ts {
+				l[i] = &models.Tenant{Name: t}
+				i++
+			}
+			if err := m.addTenants(ctx, principal, c, l); err != nil {
+				return err
+			}
+			log.Printf("tenants %+v created!", ts)
+		}
+	}
+	return nil
+}
+
+func (m *autoSchemaManager) addTenants(ctx context.Context, principal *models.Principal,
+	class *models.Class, tenants []*models.Tenant,
+) error {
+	if len(tenants) == 0 {
+		return fmt.Errorf(
+			"tenants must be included for multitenant-enabled class %q", class.Class)
+	}
+	if err := m.schemaManager.AddTenants(ctx, principal, class.Class, tenants); err != nil {
+		if !strings.Contains(err.Error(), "already exists") {
+			return err
+		}
+	}
+	return nil
+}
+
+func shouldAutoCreateTenants(class *models.Class) bool {
+	if class.MultiTenancyConfig == nil {
+		return false
+	}
+	return class.MultiTenancyConfig.Enabled && class.MultiTenancyConfig.AutoTenantCreation
 }
