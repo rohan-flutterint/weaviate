@@ -344,7 +344,7 @@ func assertSingleSegmentOfSize(t *testing.T, bucket *Bucket, expectedMinSize, ex
 	}
 	require.Len(t, dbFiles, 1)
 
-	fi, err := os.Stat(bucket.dir + "/" + dbFiles[0])
+	fi, err := os.Stat(dbFiles[0])
 	require.NoError(t, err)
 	assert.LessOrEqual(t, expectedMinSize, fi.Size())
 	assert.GreaterOrEqual(t, expectedMaxSize, fi.Size())
@@ -362,7 +362,7 @@ func assertSecondSegmentOfSize(t *testing.T, bucket *Bucket, expectedMinSize, ex
 	}
 	require.Len(t, dbFiles, 2)
 
-	fi, err := os.Stat(bucket.dir + "/" + dbFiles[1])
+	fi, err := os.Stat(dbFiles[1])
 	require.NoError(t, err)
 	assert.LessOrEqual(t, expectedMinSize, fi.Size())
 	assert.GreaterOrEqual(t, expectedMaxSize, fi.Size())
