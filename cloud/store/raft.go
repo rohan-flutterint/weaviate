@@ -12,6 +12,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +26,6 @@ import (
 	"github.com/hashicorp/raft"
 	raftbolt "github.com/hashicorp/raft-boltdb/v2"
 	command "github.com/weaviate/weaviate/cloud/proto/cluster"
-	"golang.org/x/exp/slices"
 	gproto "google.golang.org/protobuf/proto"
 )
 
@@ -43,7 +43,7 @@ const (
 )
 
 // Open opens this store and marked as such.
-func (st *Store) Open() (err error) {
+func (st *Store) Open(ctx context.Context, loadDB func() error) (err error) {
 	fmt.Println("bootstrapping started")
 	if st.open.Load() { // store already opened
 		return nil
@@ -83,11 +83,40 @@ func (st *Store) Open() (err error) {
 	}
 	log.Printf("raft.NewTCPTransport  address=%v tcpAddress=%v maxPool=%v timeOut=%v\n", address, tcpAddr, tcpMaxPool, tcpTimeout)
 
+	// restore database
+	snapID, snapIdx, err := st.applySnapshot(snapshotStore)
+	if err != nil {
+		return fmt.Errorf("read snapshot %s: %w", snapID, err)
+	}
+	rLog := rLog{logStore}
+	st.initialLastAppliedIndex, err = rLog.LastAppliedCommand()
+	if err != nil {
+		return fmt.Errorf("read log last command: %w", err)
+	}
+
+	st.initialLastAppliedIndex, err = rLog.Apply(snapIdx, st.Apply)
+	if err != nil {
+		return fmt.Errorf("read log: %w", err)
+	}
+
+	for _, cls := range st.schema.Classes {
+		st.parser.ParseClass(&cls.Class)
+		cls.Sharding.SetLocalName(st.nodeID)
+	}
+
+	if err := loadDB(); err != nil {
+		return fmt.Errorf("load db: %w", err)
+	}
+
+	log.Println("DB has been successfully loaded")
+
 	// raft node
 	st.raft, err = raft.NewRaft(st.configureRaft(), st, logCache, logStore, snapshotStore, transport)
 	if err != nil {
 		return fmt.Errorf("raft.NewRaft %v %w", address, err)
 	}
+
+	log.Printf("starting raft applied_index %d last_index %d\n", st.raft.AppliedIndex(), st.raft.LastIndex())
 
 	go func() {
 		lastLeader := "Unknown"
@@ -111,6 +140,7 @@ func (st *Store) Open() (err error) {
 // ApplyFuture returned by Raft.Apply method if that
 // method was called on the same Raft node as the FSM.
 func (st *Store) Apply(l *raft.Log) interface{} {
+	log.Println("apply", l.Type, l.Index) //, st.raft.AppliedIndex(), st.raft.LastIndex())
 	if l.Type != raft.LogCommand {
 		log.Printf("%v is not a log command\n", l.Type)
 		return nil
@@ -122,6 +152,9 @@ func (st *Store) Apply(l *raft.Log) interface{} {
 		log.Printf("apply: unmarshal command %v\n", err)
 		return nil
 	}
+	schemaOnly := l.Index <= st.initialLastAppliedIndex
+
+	// TODO: consider applying st.initialLastAppliedIndex
 	// log.Printf("apply: op=%v key=%v value=%v", cmd.Type, cmd.Class, cmd.SubCommand)
 	switch cmd.Type {
 	case command.ApplyRequest_TYPE_ADD_CLASS, command.ApplyRequest_TYPE_RESTORE_CLASS:
@@ -137,7 +170,7 @@ func (st *Store) Apply(l *raft.Log) interface{} {
 			return Response{Error: err}
 		}
 		req.State.SetLocalName(st.nodeID)
-		if ret.Error = st.schema.addClass(req.Class, req.State); ret.Error == nil {
+		if ret.Error = st.schema.addClass(req.Class, req.State); ret.Error == nil && !schemaOnly {
 			st.db.AddClass(req)
 		}
 	case command.ApplyRequest_TYPE_UPDATE_CLASS:
@@ -151,12 +184,14 @@ func (st *Store) Apply(l *raft.Log) interface{} {
 		if err := st.parser.ParseClass(req.Class); err != nil {
 			return Response{Error: err}
 		}
-		if ret.Error = st.schema.updateClass(req.Class, req.State); ret.Error == nil {
+		if ret.Error = st.schema.updateClass(req.Class, req.State); ret.Error == nil && !schemaOnly {
 			st.db.UpdateClass(req)
 		}
 	case command.ApplyRequest_TYPE_DELETE_CLASS:
 		st.schema.deleteClass(cmd.Class)
-		st.db.DeleteClass(cmd.Class)
+		if !schemaOnly {
+			st.db.DeleteClass(cmd.Class)
+		}
 	case command.ApplyRequest_TYPE_ADD_PROPERTY:
 		req := command.AddPropertyRequest{}
 		if err := json.Unmarshal(cmd.SubCommand, &req); err != nil {
@@ -165,7 +200,7 @@ func (st *Store) Apply(l *raft.Log) interface{} {
 		if req.Property == nil {
 			return Response{Error: fmt.Errorf("nil property")}
 		}
-		if ret.Error = st.schema.addProperty(cmd.Class, *req.Property); ret.Error == nil {
+		if ret.Error = st.schema.addProperty(cmd.Class, *req.Property); ret.Error == nil && !schemaOnly {
 			st.db.AddProperty(cmd.Class, req)
 		}
 
@@ -174,14 +209,16 @@ func (st *Store) Apply(l *raft.Log) interface{} {
 		if err := json.Unmarshal(cmd.SubCommand, &req); err != nil {
 			return Response{Error: err}
 		}
-		ret.Error = st.db.UpdateShardStatus(&req)
+		if !schemaOnly {
+			ret.Error = st.db.UpdateShardStatus(&req)
+		}
 
 	case command.ApplyRequest_TYPE_ADD_TENANT:
 		req := &command.AddTenantsRequest{}
 		if err := gproto.Unmarshal(cmd.SubCommand, req); err != nil {
 			return Response{Error: err}
 		}
-		if ret.Error = st.schema.addTenants(cmd.Class, req); ret.Error == nil {
+		if ret.Error = st.schema.addTenants(cmd.Class, req); ret.Error == nil && !schemaOnly {
 			st.db.AddTenants(cmd.Class, req)
 		}
 	case command.ApplyRequest_TYPE_UPDATE_TENANT:
@@ -190,7 +227,7 @@ func (st *Store) Apply(l *raft.Log) interface{} {
 			return Response{Error: err}
 		}
 		ret.Data, ret.Error = st.schema.updateTenants(cmd.Class, req)
-		if ret.Error == nil {
+		if ret.Error == nil && !schemaOnly {
 			st.db.UpdateTenants(cmd.Class, req)
 		}
 	case command.ApplyRequest_TYPE_DELETE_TENANT:
@@ -201,10 +238,16 @@ func (st *Store) Apply(l *raft.Log) interface{} {
 		if err := st.schema.deleteTenants(cmd.Class, req); err != nil {
 			log.Printf("delete tenants from class %q: %v", cmd.Class, err)
 		}
-		st.db.DeleteTenants(cmd.Class, req)
+		if !schemaOnly {
+			st.db.DeleteTenants(cmd.Class, req)
+		}
 
 	default:
 		log.Printf("unknown command %v\n", &cmd)
+	}
+
+	if st.initialLastAppliedIndex == l.Index {
+		log.Println("state has been successfully restored at index", l.Index)
 	}
 	return ret
 }
@@ -216,34 +259,23 @@ func (st *Store) Snapshot() (raft.FSMSnapshot, error) {
 
 func (st *Store) Restore(rc io.ReadCloser) error {
 	log.Println("restoring snapshot")
+	defer func() {
+		if err := rc.Close(); err != nil {
+			log.Printf("restore snapshot: close reader: %v\n", err)
+		}
+	}()
+	//
+	// b, err := ioutil.ReadAll(rc)
+	// if err != nil {
+	// 	return err
+	// }
+	// err = os.WriteFile("hello.json", b, 0o666)
+	// if err != nil {
+	// 	return err
+	// }
+	//
 	if err := st.schema.Restore(rc); err != nil {
 		log.Printf("restore shanpshot: %v", err)
-	}
-
-	for k, v := range st.schema.Classes {
-		if err := st.parser.ParseClass(&v.Class); err != nil {
-			log.Printf("parse class %v", err)
-			continue
-		}
-		v.Sharding.SetLocalName(st.nodeID)
-		if err := st.db.AddClass(command.AddClassRequest{
-			Class: &v.Class,
-			State: &v.Sharding,
-		}); err != nil {
-			log.Printf("add class %v", err)
-			continue
-		}
-
-		for _, t := range v.Sharding.Physical {
-			if !slices.Contains[string](t.BelongsToNodes, st.nodeID) {
-				continue
-			}
-			st.db.AddTenants(k, &command.AddTenantsRequest{
-				Tenants: []*command.Tenant{
-					{Name: t.Name, Status: t.Status, Nodes: t.BelongsToNodes},
-				},
-			})
-		}
 	}
 	return nil
 }
@@ -355,23 +387,44 @@ func (st *Store) assertFuture(fut raft.IndexFuture) error {
 	}
 }
 
-func (s *Store) raftConfig() (raft.Configuration, error) {
-	cfg := s.raft.GetConfiguration()
+func (st *Store) raftConfig() (raft.Configuration, error) {
+	cfg := st.raft.GetConfiguration()
 	if err := cfg.Error(); err != nil {
 		return raft.Configuration{}, err
 	}
 	return cfg.Configuration(), nil
 }
 
-func (f *Store) configureRaft() *raft.Config {
+func (st *Store) configureRaft() *raft.Config {
 	cfg := raft.DefaultConfig()
-	if f.raftHeartbeatTimeout != 0 {
-		cfg.HeartbeatTimeout = f.raftHeartbeatTimeout
+	if st.raftHeartbeatTimeout != 0 {
+		cfg.HeartbeatTimeout = st.raftHeartbeatTimeout
 	}
-	if f.raftElectionTimeout != 0 {
-		cfg.ElectionTimeout = f.raftElectionTimeout
+	if st.raftElectionTimeout != 0 {
+		cfg.ElectionTimeout = st.raftElectionTimeout
 	}
-	cfg.LocalID = raft.ServerID(f.nodeID)
+	cfg.LocalID = raft.ServerID(st.nodeID)
 	cfg.SnapshotThreshold = 250 // TODO remove
 	return cfg
+}
+
+func (st *Store) applySnapshot(ss *raft.FileSnapshotStore) (string, uint64, error) {
+	ls, err := ss.List()
+	if err != nil {
+		return "", 0, err
+	}
+	if len(ls) == 0 {
+		return "", 0, nil
+	}
+	id := ls[0].ID
+	idx := ls[0].Index
+	_, rc, err := ss.Open(id)
+	if err != nil {
+		return id, 0, err
+	}
+
+	if err := st.schema.Restore(rc); err != nil {
+		return id, 0, err
+	}
+	return id, idx, nil
 }

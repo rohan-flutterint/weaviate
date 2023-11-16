@@ -26,17 +26,11 @@ type snapshot struct {
 	Classes    map[string]*metaClass `json:"classes"`
 }
 
-func (s *schema) Restore(rc io.ReadCloser) error {
+func (s *schema) Restore(r io.Reader) error {
 	log.Println("restoring snapshot")
 	snap := snapshot{}
 
-	defer func() {
-		if err2 := rc.Close(); err2 != nil {
-			log.Printf("restore snapshot: close reader: %v\n", err2)
-		}
-	}()
-
-	if err := json.NewDecoder(rc).Decode(&snap); err != nil {
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return fmt.Errorf("restore snapshot: decode json: %v", err)
 	}
 	if snap.NodeID == s.nodeID {
