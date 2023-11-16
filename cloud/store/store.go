@@ -84,6 +84,9 @@ type Store struct {
 
 	mutex      sync.Mutex
 	candidates map[string]string
+
+	// initialLastAppliedIndex represents the index of the last applied command when the store is opened.
+	initialLastAppliedIndex uint64
 }
 
 func New(cfg Config) Store {
