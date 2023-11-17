@@ -360,4 +360,4 @@ func (f *schema) GetShardsStatus(class string) (models.ShardStatusList, error) {
 	return f.shardReader.GetShardsStatus(class)
 }
 
-// TODO return Err_NotOpen during read
+/// TODO return Err_NotOpen during read

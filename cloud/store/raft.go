@@ -42,6 +42,9 @@ const (
 	nRetainedSnapShots = 1
 )
 
+// TODO: make loadDB an inteface
+// impl restoreDataBase
+
 // Open opens this store and marked as such.
 func (st *Store) Open(ctx context.Context, loadDB func() error) (err error) {
 	fmt.Println("bootstrapping started")
@@ -88,6 +91,7 @@ func (st *Store) Open(ctx context.Context, loadDB func() error) (err error) {
 	if err != nil {
 		return fmt.Errorf("read snapshot %s: %w", snapID, err)
 	}
+	st.snapshotFirstRestore = snapIdx > 0 // no snapshot
 	rLog := rLog{logStore}
 	st.initialLastAppliedIndex, err = rLog.LastAppliedCommand()
 	if err != nil {
@@ -257,6 +261,9 @@ func (st *Store) Snapshot() (raft.FSMSnapshot, error) {
 	return st.schema, nil
 }
 
+// Restore is used to restore an FSM from a snapshot. It is not called
+// concurrently with any other command. The FSM must discard all previous
+// state before restoring the snapshot.
 func (st *Store) Restore(rc io.ReadCloser) error {
 	log.Println("restoring snapshot")
 	defer func() {
@@ -264,20 +271,19 @@ func (st *Store) Restore(rc io.ReadCloser) error {
 			log.Printf("restore snapshot: close reader: %v\n", err)
 		}
 	}()
-
-	//
-	// b, err := ioutil.ReadAll(rc)
-	// if err != nil {
-	// 	return err
-	// }
-	// err = os.WriteFile("hello.json", b, 0o666)
-	// if err != nil {
-	// 	return err
-	// }
-	//
-	if err := st.schema.Restore(rc, false); err != nil {
-		log.Printf("restore shanpshot: %v", err)
+	if st.snapshotFirstRestore { // no concurrent access no race conditon
+		st.snapshotFirstRestore = false // second time
+		return nil
 	}
+	if err := st.schema.Restore(rc); err != nil {
+		return fmt.Errorf("restore snapshot: %w", err)
+	}
+
+	// TODO-RAFT START
+	// In some cases, when the follower state is too far behind the leader's log, the leader might decide to send a snapshot.
+	// Consequently, the follower needs to update its state accordingly.
+	// Task: https://semi-technology.atlassian.net/browse/WVT-42
+	//
 	return nil
 }
 
@@ -409,23 +415,21 @@ func (st *Store) configureRaft() *raft.Config {
 	return cfg
 }
 
+// applySnapshot applies latest snapshot
 func (st *Store) applySnapshot(ss *raft.FileSnapshotStore) (string, uint64, error) {
 	ls, err := ss.List()
-	if err != nil {
+	if err != nil || len(ls) == 0 {
 		return "", 0, err
 	}
-	if len(ls) == 0 {
-		return "", 0, nil
-	}
-	id := ls[0].ID
-	idx := ls[0].Index
+
+	id, index := ls[0].ID, ls[0].Index
 	_, rc, err := ss.Open(id)
 	if err != nil {
 		return id, 0, err
 	}
 
-	if err := st.schema.Restore(rc, true); err != nil {
+	if err := st.schema.Restore(rc); err != nil {
 		return id, 0, err
 	}
-	return id, idx, nil
+	return id, index, nil
 }

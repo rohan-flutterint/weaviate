@@ -87,6 +87,8 @@ type Store struct {
 
 	// initialLastAppliedIndex represents the index of the last applied command when the store is opened.
 	initialLastAppliedIndex uint64
+	// snapshotFirstRestore is a flag mainly used by the restore() to prevent restoring the same snapshot twice.
+	snapshotFirstRestore bool
 }
 
 func New(cfg Config) Store {

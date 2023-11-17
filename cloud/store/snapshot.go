@@ -26,15 +26,11 @@ type snapshot struct {
 	Classes    map[string]*metaClass `json:"classes"`
 }
 
-func (s *schema) Restore(r io.Reader, force bool) error {
+func (s *schema) Restore(r io.Reader) error {
 	log.Println("restoring snapshot")
 	snap := snapshot{}
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return fmt.Errorf("restore snapshot: decode json: %v", err)
-	}
-
-	if !force && s.nodeID == snap.NodeID {
-		return nil // return nil // restore already happen before starting raft
 	}
 
 	s.Lock()
