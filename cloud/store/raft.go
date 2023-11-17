@@ -264,6 +264,7 @@ func (st *Store) Restore(rc io.ReadCloser) error {
 			log.Printf("restore snapshot: close reader: %v\n", err)
 		}
 	}()
+
 	//
 	// b, err := ioutil.ReadAll(rc)
 	// if err != nil {
@@ -274,7 +275,7 @@ func (st *Store) Restore(rc io.ReadCloser) error {
 	// 	return err
 	// }
 	//
-	if err := st.schema.Restore(rc); err != nil {
+	if err := st.schema.Restore(rc, false); err != nil {
 		log.Printf("restore shanpshot: %v", err)
 	}
 	return nil
@@ -423,7 +424,7 @@ func (st *Store) applySnapshot(ss *raft.FileSnapshotStore) (string, uint64, erro
 		return id, 0, err
 	}
 
-	if err := st.schema.Restore(rc); err != nil {
+	if err := st.schema.Restore(rc, true); err != nil {
 		return id, 0, err
 	}
 	return id, idx, nil
